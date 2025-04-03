@@ -1,0 +1,1 @@
+Port my25 : 220 mail1.pole-esg.fr ESMTP
