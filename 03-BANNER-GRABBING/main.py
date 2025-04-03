@@ -1,51 +1,61 @@
-from scapy.all import sniff, IP, TCP, UDP, ARP
-from collections import defaultdict
-import signal
-import sys
-import time
+import socket
+import threading
 
-# Dictionnaires pour la détection
-syn_packets = defaultdict(list)
-arp_requests = defaultdict(int)
+# Timeout global
+socket.setdefaulttimeout(1)
 
-def packet_callback(pkt):
+# Résultats détectés
+open_ports = []
+
+def grab_banner(ip, port):
     try:
-        if IP in pkt:
-            src_ip = pkt[IP].src
-            dst_ip = pkt[IP].dst
-            proto = pkt[IP].proto
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.connect((ip, port))
+            try:
+                # Requête spéciale pour HTTP
+                if port in [80, 443]:
+                    s.send(b"HEAD / HTTP/1.1\r\nHost: %b\r\n\r\n" % ip.encode())
+                banner = s.recv(1024).decode(errors='ignore').strip()
+                if banner:
+                    print(f"[+] Port {port} ouvert – Service détecté : {banner}")
+                    open_ports.append((port, banner))
+                else:
+                    # Port ouvert mais silencieux
+                    pass
+            except socket.timeout:
+                pass
+    except:
+        pass  # Port fermé ou inaccessible
 
-            if proto == 6 and TCP in pkt:
-                print(f"[TCP] {src_ip} -> {dst_ip} | Flags: {pkt[TCP].flags}")
-                detect_syn_scan(pkt)
-            elif proto == 17 and UDP in pkt:
-                print(f"[UDP] {src_ip} -> {dst_ip}")
-        elif ARP in pkt:
-            detect_arp(pkt)
-    except Exception as e:
-        print(f"Erreur lors de l'analyse du paquet : {e}")
+def scan_ports(ip, start_port, end_port):
+    threads = []
 
-def detect_syn_scan(pkt):
-    if pkt[TCP].flags == 'S':
-        syn_packets[pkt[IP].src].append(pkt[IP].dst)
-        if len(syn_packets[pkt[IP].src]) > 10:  # seuil configurable
-            print(f"[ALERTE] Scan SYN détecté depuis {pkt[IP].src}")
+    for port in range(start_port, end_port + 1):
+        t = threading.Thread(target=grab_banner, args=(ip, port))
+        t.start()
+        threads.append(t)
 
-def detect_arp(pkt):
-    if pkt[ARP].op == 1:  # ARP request
-        sender = pkt[ARP].psrc
-        arp_requests[sender] += 1
-        if arp_requests[sender] > 5:  # seuil configurable
-            print(f"[ALERTE] Requêtes ARP suspectes depuis {sender}")
+    for thread in threads:
+        thread.join()
 
-def stop_sniffer(signal_received, frame):
-    print("\n[INFO] Arrêt du sniffer proprement.")
-    sys.exit(0)
-
-def main():
-    print("[INFO] Démarrage du sniffer... (CTRL+C pour arrêter)")
-    signal.signal(signal.SIGINT, stop_sniffer)
-    sniff(prn=packet_callback, store=0)
+    if not open_ports:
+        print("Aucun service détecté sur cette plage de ports.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        ip = input("Entrez l'adresse IP à scanner : ").strip()
+        start_port = int(input("Port de début : ").strip())
+        end_port = int(input("Port de fin : ").strip())
+
+        print(f"\n[INFO] Scan de {ip} sur les ports {start_port} à {end_port}...\n")
+        scan_ports(ip, start_port, end_port)
+
+        # Bonus : Sauvegarde dans un fichier
+        with open("resultats_banner.txt", "w") as f:
+            for port, banner in open_ports:
+                f.write(f"Port my{port} : {banner}\n")
+
+    except KeyboardInterrupt:
+        print("\n[INFO] Interruption par l'utilisateur.")
+    except ValueError:
+        print("[ERREUR] Ports invalides.")
